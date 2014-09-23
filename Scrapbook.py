@@ -10,6 +10,7 @@ from os import fdopen, listdir, makedirs, remove
 from os.path import expanduser, getmtime, getsize, isdir, isfile, join
 from platform import system
 from sqlite3 import connect
+from shutil import rmtree
 from sys import argv, exit, getfilesystemencoding, stdout # pylint: disable=W0622
 from time import gmtime, mktime, strptime
 from urllib2 import build_opener, HTTPCookieProcessor, Request
@@ -92,12 +93,14 @@ class ScrapbookDownloader(object):
         print "Downloading to %s" % self.targetDir
         url = START_URL
         nAlbumListPage = 1
+        albumNames = set()
         while url:
             print ".page %d" % nAlbumListPage
             albumListPage = BeautifulSoup(self.load(url))
             for a in albumListPage.select(ALBUM_SELECTOR):
                 albumName = a.text
-                albumPath = join(self.targetDir, encodeForFileSystem(cleanupFileName(albumName)))
+                albumPath = encodeForFileSystem(join(self.targetDir, cleanupFileName(albumName)))
+                albumNames.add(albumPath)
                 if not isdir(albumPath):
                     makedirs(albumPath)
                 print "..%s" % encodeForConsole(albumName)
@@ -142,6 +145,13 @@ class ScrapbookDownloader(object):
                             remove(fullName)
             url = albumListPage.select(PAGER_NEXT_SELECTOR)[0].get(HREF)
             nAlbumListPage += 1
+        if albumNames:
+            for dirName in listdir(self.targetDir):
+                fullName = join(self.targetDir, dirName)
+                if fullName not in albumNames and isdir(fullName):
+                    print "...REMOVING %s" % dirName
+                    rmtree(fullName)
+        print "DONE"
 
 def main(args):
     exit(1 if ScrapbookDownloader(args).run() else 0)
