@@ -6,12 +6,15 @@
 # On Windows, a newer version of sqlite3.dll must be downloaded from http://sqlite.org/download.html and put to C:\Python27\DLLs
 #
 from cookielib import Cookie, LWPCookieJar
-from os import listdir, makedirs
-from os.path import expanduser, getmtime, isdir, isfile, join
+from os import fdopen, listdir, makedirs, remove
+from os.path import expanduser, getmtime, getsize, isdir, isfile, join
 from platform import system
 from sqlite3 import connect
 from sys import argv, exit, getfilesystemencoding, stdout # pylint: disable=W0622
+from time import gmtime, mktime, strptime
 from urllib2 import build_opener, HTTPCookieProcessor, Request
+
+stdout = fdopen(stdout.fileno(), 'w', 0)
 
 try:
     from bs4 import BeautifulSoup
@@ -42,7 +45,7 @@ def getFirefoxCookies(domain = ''):
 def loadWithCookies(url, cookieJar, userAgent = 'Mozilla/4.0 (compatible; MSIE 5.5; Windows NT)'):
     """Returns a document download from the specified URL, accessed with specified cookies."""
     opener = build_opener(HTTPCookieProcessor(cookieJar))
-    return opener.open(Request(url, None, {'User-Agent' : userAgent})).read()
+    return opener.open(Request(url, None, {'User-Agent' : userAgent}))
 
 INVALID_FILENAME_CHARS = '<>:"/\\|?*\'' # for file names, to be replaced with _
 def cleanupFileName(fileName):
@@ -77,7 +80,13 @@ class ScrapbookDownloader(object):
         self.targetDir = args[0] if args else '.'
 
     def load(self, url):
-        return loadWithCookies(url, self.cookies)
+        return loadWithCookies(url, self.cookies).read()
+
+    def check(self, url):
+        request = loadWithCookies(url, self.cookies)
+        return (int(request.headers['content-length']),
+            mktime(strptime(request.headers['last-modified'], '%a, %d %b %Y %H:%M:%S %Z')),
+            request.read)
 
     def run(self):
         print "Downloading to %s" % self.targetDir
@@ -94,6 +103,7 @@ class ScrapbookDownloader(object):
                 print "..%s" % encodeForConsole(albumName)
                 url = a[HREF]
                 nAlbumPage = 1
+                fileNames = set()
                 while url:
                     print "...page %d" % nAlbumPage
                     albumPage = BeautifulSoup(self.load(url))
@@ -102,12 +112,34 @@ class ScrapbookDownloader(object):
                         imagePage = BeautifulSoup(self.load(url))
                         title = imagePage.select(IMAGE_TITLE_SELECTOR)[0]
                         imageName = url.split('/')[-1] if IMAGE_TITLE_EMPTY_CLASS in title[CLASS] else title.text
-                        print "....%s" % encodeForConsole(imageName)
+                        print ("....%s" % encodeForConsole(imageName)),
                         url = imagePage.select(IMAGE_LINK_SELECTOR)[0][HREF]
-                        with open(join(albumPath, '%s.%s' % (encodeForFileSystem(cleanupFileName(imageName)), url.split('.')[-1].lower())), 'wb') as f:
-                            f.write(self.load(url))
+                        fileName = encodeForFileSystem(join(albumPath, '%s.%s' % (cleanupFileName(imageName), url.split('.')[-1].lower())))
+                        fileNames.add(fileName)
+                        (urlSize, urlTime, urlLoader) = self.check(url)
+                        needDownload = True
+                        if isfile(fileName):
+                            if getsize(fileName) != urlSize:
+                                print "remote size differs, re-saving"
+                            elif mktime(gmtime(getmtime(fileName))) < urlTime:
+                                print "remote is newer, re-saving"
+                            else:
+                                print "OK"
+                                needDownload = False
+                        else:
+                            print "new, saving"
+                        if needDownload:
+                            data = urlLoader() # make sure download is ok before eraising older file data
+                            with open(fileName, 'wb') as f:
+                                f.write(data)
                     url = albumPage.select(PAGER_NEXT_SELECTOR)[0].get(HREF)
                     nAlbumPage += 1
+                if fileNames:
+                    for fileName in listdir(albumPath):
+                        fullName = join(albumPath, fileName)
+                        if fullName not in fileNames:
+                            print "...REMOVING %s" % fileName
+                            remove(fullName)
             url = albumListPage.select(PAGER_NEXT_SELECTOR)[0].get(HREF)
             nAlbumListPage += 1
 
