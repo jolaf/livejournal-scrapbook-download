@@ -1,0 +1,1 @@
+-- Moved from https://code.google.com/p/livejournal-scrapbook-download
